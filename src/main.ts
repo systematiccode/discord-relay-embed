@@ -40,10 +40,7 @@ function isRemoved(target: Comment | Post) {
 }
 
 async function isShadowBanned(context: TriggerContext, target: Comment | Post) {
-    // return !(await target.getAuthor())
-    return !(
-        await context.reddit.getUserByUsername("Rare-Independent-345")
-    );
+    return !(await target.getAuthor())
 }
 
 Devvit.addSchedulerJob({

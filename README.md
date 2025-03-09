@@ -67,11 +67,15 @@ If you have any feedback or suggestions for Discord Relay, file a bug report or 
 
 ## Changes
 
+### 2.4.1
+
+- Fix shadowbanned check to actually test the author instead of the test author.
+
 ### 2.4.0
 
-- Added ability to only relay items of approved users.
-- Added ability to skip Reddit safety checks.
-- Added ability to ignore items by shadowbanned or deleted authors.
+- Added the ability to only relay items of approved users.
+- Added the ability to skip Reddit safety checks.
+- Added the ability to ignore items by shadowbanned or deleted authors.
 
 ### 2.3.1
 
@@ -94,7 +98,7 @@ If you have any feedback or suggestions for Discord Relay, file a bug report or 
 
 ### 2.1.1
 
-- Added ability to white/blacklist by username, moderator status, and user/post flair.
+- Added the ability to white/blacklist by username, moderator status, and user/post flair.
 
 ### 2.0.3
 
