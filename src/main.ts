@@ -1,8 +1,10 @@
 import {ModAction} from "@devvit/protos";
 import {
     Comment,
-    Devvit, JobContext,
-    Post, ScheduledJobEvent,
+    Devvit,
+    JobContext,
+    Post,
+    ScheduledJobEvent,
     SettingsFormFieldValidatorEvent,
     Subreddit,
     TriggerContext,
@@ -37,6 +39,13 @@ function isRemoved(target: Comment | Post) {
         === "legal";
 }
 
+async function isShadowBanned(context: TriggerContext, target: Comment | Post) {
+    // return !(await target.getAuthor())
+    return !(
+        await context.reddit.getUserByUsername("Rare-Independent-345")
+    );
+}
+
 Devvit.addSchedulerJob({
     name: RELAY_SCHEDULED_JOB,
     onRun: async (event: ScheduledJobEvent<any>, context: JobContext) => {
@@ -52,7 +61,7 @@ Devvit.addSchedulerJob({
         item = itemType === "post" ? await reddit.getPostById(itemId) : await reddit.getCommentById(itemId);
         if (await settings.get("ignore-removed") && isRemoved(item)) {
             console.log(`Not relaying due to item removed: ${uniqueId}`);
-            return
+            return;
         }
         console.log(`Relaying event ${uniqueId}`);
         await relay(context, item, webhookUrl, data);
@@ -67,9 +76,9 @@ Devvit.addSchedulerJob({
         if (relayMode[0] !== "front-page") {
             return;
         }
-        console.log("Checking front page")
+        console.log("Checking front page");
         const subreddit = await reddit.getCurrentSubreddit();
-        const posts = await subreddit.getTopPosts({limit: 100}).all()
+        const posts = await subreddit.getTopPosts({limit: 100}).all();
         console.log(`Checking ${posts.length} posts`);
         posts.map(async (post) => {
             const shouldRelayItem = await shouldRelay({type: "FrontPageCheck", post}, context);
@@ -87,7 +96,7 @@ Devvit.addSettings([
         name: "webhook-url",
         onValidate: (event) => {
             if (event.value!.length == 0) {
-                return "Please enter a webhook URL"
+                return "Please enter a webhook URL";
             }
         },
         type: "string",
@@ -212,6 +221,13 @@ Devvit.addSettings([
                         name: "post-flair",
                         type: "string",
                     },
+                    {
+                        helpText: "If enabled, only authors that are also Approved Users can relay. This check is in addition to other checks.",
+                        label: "Only Approved Authors",
+                        name: "only-approved-users",
+                        type: "boolean",
+                        defaultValue: false,
+                    },
                 ],
                 helpText: "Relay items by username(s)/moderators or post/user flairs. If any of these settings match, the item will be relayed.",
                 label: "Inclusion Filters",
@@ -236,6 +252,13 @@ Devvit.addSettings([
                         label: "Post Flair Text",
                         name: "ignore-post-flair",
                         type: "string",
+                    },
+                    {
+                        helpText: "If enabled, authors that deleted their account or is shadowbanned will not be relayed.",
+                        label: "Ignore Shadowbanned or Deleted Authors",
+                        name: "ignore-shadowbanned",
+                        type: "boolean",
+                        defaultValue: false,
                     },
                 ],
                 helpText: "Ignore by username(s)/moderators or post/user flairs. Takes precedence over all other settings. If any of these settings match, the item will not be relayed.",
@@ -284,6 +307,12 @@ Devvit.addSettings([
                 name: "post-score-threshold",
                 type: "number",
             },
+            {
+                helpText: "If enabled, skip built-in Reddit safety checks and relay the item to Discord. Useful for moderation feeds.",
+                label: "Skip Reddit Safety Checks",
+                name: "skip-safety-checks",
+                type: "boolean",
+            },
         ],
         helpText: "Delay relaying to Discord for a set amount of time after the item is created to allow for moderation.",
         label: "Delay Settings",
@@ -321,20 +350,35 @@ Devvit.addTrigger({
 });
 
 Devvit.addTrigger({
-    events: ["CommentCreate", "PostCreate"],
+    events: ["CommentCreate", "PostCreate", "CommentSubmit", "PostSubmit"],
     onEvent: async function (
         event: any,
         context: TriggerContext,
     ) {
         const {reddit, redis, settings} = context;
+        const skipSafetyChecks = await settings.get("skip-safety-checks");
+        if ((
+            event.type === "CommentSubmit" || event.type === "PostSubmit"
+        ) === !skipSafetyChecks) {
+            console.log(`${skipSafetyChecks ? "Skipping" : "Waiting for"} safety checks`);
+            return;
+        }
         const relayMode: string[] = await settings.get("relay-mode") || ["immediately"];
         if (relayMode[0] === "front-page") {
             return;
         }
-        const uniqueId = event.type === "CommentCreate"
+        const uniqueId = (
+            event.type === "CommentCreate"
+        ) || (
+            event.type === "CommentSubmit"
+        )
             ? `${event.comment.parentId}/${event.comment.id}`
             : event.post.id;
-        const item = event.type === "CommentCreate"
+        const item = (
+            event.type === "CommentCreate"
+        ) || (
+            event.type === "CommentSubmit"
+        )
             ? await reddit.getCommentById(event.comment.id)
             : await reddit.getPostById(event.post.id);
         console.log(`Received ${event.type} event (${uniqueId}) by u/${item.authorName}`);
@@ -366,7 +410,7 @@ Devvit.addTrigger({
             uniqueId = target.id;
         } else {
             target = await reddit.getCommentById(event.targetComment?.id || "");
-            uniqueId = `${target.parentId}/${target.id}`
+            uniqueId = `${target.parentId}/${target.id}`;
         }
         console.log(`Received ${event.action} mod action (${uniqueId})`);
         const shouldRelayItem = await redis.hGet(target.id, "shouldRelay") === "true";
@@ -391,7 +435,7 @@ async function relay(
             "Content-Type": "application/json",
         },
         body: JSON.stringify(data),
-    })
+    });
     console.log(`Webhook response: ${response.status} ${await response.text()}`);
     await context.redis.hSet(item.id, {relayed: "true"});
 }
@@ -411,13 +455,13 @@ async function scheduleRelay(context: TriggerContext, item: Comment | Post, skip
     let suppressAuthorEmbed = await settings.get("suppress-author-embed") || false;
     let suppressItemEmbed = await settings.get("suppress-item-embed") || false;
     let message = `New [${itemType}](${suppressItemEmbed
-        ? '<'
-        : ''}https://www.reddit.com${item.permalink}${suppressItemEmbed
-        ? '>'
-        : ''}) by [u/${username}](${suppressAuthorEmbed ? '<' : ''}${authorUrl}${suppressAuthorEmbed ? '>' : ''})!`
+        ? "<"
+        : ""}https://www.reddit.com${item.permalink}${suppressItemEmbed
+        ? ">"
+        : ""}) by [u/${username}](${suppressAuthorEmbed ? "<" : ""}${authorUrl}${suppressAuthorEmbed ? ">" : ""})!`;
     if (await settings.get("ping-role")) {
         const roleId = await settings.get("ping-role-id");
-        message = `${message}\n<@&${roleId}>`
+        message = `${message}\n<@&${roleId}>`;
     }
     const data = {
         content: message,
@@ -428,20 +472,20 @@ async function scheduleRelay(context: TriggerContext, item: Comment | Post, skip
                 "everyone",
             ],
         },
-    }
+    };
     if (delay == 0) {
         console.log(`Relaying event ${uniqueId}`);
         if (await settings.get("ignore-removed") && isRemoved(item)) {
             console.log(`Not relaying due to item removed: ${uniqueId}`);
-            return
+            return;
         }
         await relay(context, item, webhookUrl, data);
     } else {
-        const runAt = new Date(Date.now() + delay * 60 * 1000)
+        const runAt = new Date(Date.now() + delay * 60 * 1000);
         console.log(`Scheduling relay (${uniqueId}) for ${delay} minutes from now (${runAt})`);
         if (await redis.hGet(item.id, "scheduled") === "true") {
             console.log(`Relay job already scheduled for ${uniqueId}`);
-            return
+            return;
         }
         await context.scheduler.runJob({
             name: RELAY_SCHEDULED_JOB,
@@ -464,19 +508,29 @@ async function shouldRelay(event: any, context: TriggerContext): Promise<boolean
     let authorName: string;
     switch (event.type) {
         case "PostCreate":
-            item = event.post
-            itemType = "post"
-            authorName = event.author.name
+            item = event.post;
+            itemType = "post";
+            authorName = event.author.name;
             break;
         case "CommentCreate":
-            item = event.comment
-            itemType = "comment"
-            authorName = event.author.name
+            item = event.comment;
+            itemType = "comment";
+            authorName = event.author.name;
+            break;
+        case "PostSubmit":
+            item = event.post;
+            itemType = "post";
+            authorName = event.author.name;
+            break;
+        case "CommentSubmit":
+            item = event.comment;
+            itemType = "comment";
+            authorName = event.author.name;
             break;
         default:
-            item = event.post
-            itemType = "post"
-            authorName = item.authorName
+            item = event.post;
+            itemType = "post";
+            authorName = item.authorName;
             break;
     }
     console.log(`Checking if we should relay event (${item instanceof Comment
@@ -487,7 +541,8 @@ async function shouldRelay(event: any, context: TriggerContext): Promise<boolean
         redis,
         settings,
     } = context;
-    const subreddit: Subreddit = await reddit.getCurrentSubreddit()
+
+    const subreddit: Subreddit = await reddit.getCurrentSubreddit();
 
     const flairMap = new Map<string, string>();
 
@@ -496,7 +551,7 @@ async function shouldRelay(event: any, context: TriggerContext): Promise<boolean
     if (ignoreFlair || userFlair) {
         const userFlairs = (
             await subreddit.getUserFlairTemplates()
-        )
+        );
         for (const flair of userFlairs) {
             flairMap.set(flair.id, flair.text);
         }
@@ -505,7 +560,7 @@ async function shouldRelay(event: any, context: TriggerContext): Promise<boolean
     const ignorePostFlair: string = await settings.get("ignore-post-flair") || "";
     const postFlair: string = await settings.get("post-flair") || "";
     if (ignorePostFlair || postFlair) {
-        const postFlairs = await subreddit.getPostFlairTemplates()
+        const postFlairs = await subreddit.getPostFlairTemplates();
         for (const flair of postFlairs) {
             flairMap.set(flair.id, flair.text);
         }
@@ -519,8 +574,22 @@ async function shouldRelay(event: any, context: TriggerContext): Promise<boolean
         await redis.hGet(item.id, "relayed") === "true"
     );
 
-    let checks: boolean[] = []
+    const ignoreShadowBanned: boolean = await settings.get("ignore-shadowbanned") || false;
+    const approvedUsersOnly = await settings.get("only-approved-users") || false;
+
+    let checks: boolean[] = [];
     if (shouldRelay) {
+        if (ignoreShadowBanned && await isShadowBanned(context, item)) {
+            console.log(`Should relay event (ignoreShadowBanned): false`);
+            return false;
+        }
+        if (approvedUsersOnly) {
+            const approvedUsers = await subreddit.getApprovedUsers({username: authorName}).all();
+            if (!approvedUsers.map((item) => item.username.toLowerCase()).includes(authorName.toLowerCase())) {
+                console.log(`Should relay event (approvedUsersOnly): false`);
+                return false;
+            }
+        }
         const ignoreUsername: string = await settings.get("ignore-specific-username") || "";
         if (ignoreUsername) {
             let shouldRelayUserIgnore: boolean;
@@ -608,7 +677,9 @@ async function shouldRelay(event: any, context: TriggerContext): Promise<boolean
         if (relayMode[0] === "front-page") {
             const postScoreThreshold = await settings.get("post-score-threshold") || 0;
             if (item instanceof Post) {
-                shouldRelay = item.score >= (postScoreThreshold as number);
+                shouldRelay = item.score >= (
+                    postScoreThreshold as number
+                );
             }
         }
     }
@@ -616,17 +687,18 @@ async function shouldRelay(event: any, context: TriggerContext): Promise<boolean
         console.log(`Should relay event: ${shouldRelay}`);
         return shouldRelay;
     }
-    shouldRelay = checks.includes(true)
+    shouldRelay = checks.includes(true);
     console.log(`Should relay event: ${shouldRelay}`);
     return shouldRelay;
 }
 
 function validateDelay(event: SettingsFormFieldValidatorEvent<number>) {
-    const inputValue = event.value || 0
+    const inputValue = event.value || 0;
     if (inputValue != 0 && inputValue < MINIMUM_DELAY) {
-        return `Please enter a delay of at least ${MINIMUM_DELAY} minutes`
+        return `Please enter a delay of at least ${MINIMUM_DELAY} minutes`;
     }
 }
 
 // noinspection JSUnusedGlobalSymbols
+// @ts-ignore
 export default Devvit;

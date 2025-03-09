@@ -32,11 +32,15 @@ subreddit:`https://developers.reddit.com/r/SUBREDDIT/apps/discord-relay`.
           flairs.
         - **Post Flair Text**: Post flair text to match against. Separate each item with a comma to include multiple
           flairs.
+        - **Only Approved Authors**: If enabled, only authors that are also 'Approved Users' can relay. This list is
+          located at `https://www.reddit.com/r/SUBREDDIT/about/contributors`.
     - **Exclusion Filters**
         - **Username(s)/Moderators Only**: Ignore items from specific users or moderators. Username (without the "u/")
           or enter "m" for all moderators. Separate each item with a comma to include multiple users.
         - **User Flair Text**: User flair text to ignore. Separate each item with a comma to include multiple flairs.
         - **Post Flair Text**: Post flair text to ignore. Separate each item with a comma to include multiple flairs.
+        - **Ignore Shadowbanned or Deleted Authors**: If enabled, authors that deleted their account or is shadowbanned
+          will not be relayed.
 - **Delay Settings**: Settings to determine how long to wait before relaying items to Discord. Note: The minimum delay
   is 3 minutes and can be delayed by 1-2 minutes due to Developer Platform limitations.
     - **Comment Delay**: Number of minutes to delay relaying comments to Discord. Enter 0 to disable the delay. Must be
@@ -45,6 +49,8 @@ subreddit:`https://developers.reddit.com/r/SUBREDDIT/apps/discord-relay`.
       least 3 minutes.
     - **Ignore Removed Items**: If enabled, do not relay items that have been removed.
     - **Retry On Approval**: If enabled, retry relaying items that were removed and not relayed after the delay.
+    - **Ignore Safety Checks**: If enabled, skip built-in Reddit safety checks and relay the item to Discord. Useful for
+      moderation feeds.
 - **Suppress Item Embed**: If enabled, the embed of the comment/post like being relayed will be suppressed.
 - **Suppress Author Embed**: If enabled, the embed of the author will be suppressed. Profiles do not have embeds shown
   unless they are NSFW.
@@ -60,6 +66,12 @@ If you have any feedback or suggestions for Discord Relay, file a bug report or 
 [GitHub page](https://github.com/LilSpazJoekp/discord-relay).
 
 ## Changes
+
+### 2.4.0
+
+- Added ability to only relay items of approved users.
+- Added ability to skip Reddit safety checks.
+- Added ability to ignore items by shadowbanned or deleted authors.
 
 ### 2.3.1
 
