@@ -49,6 +49,10 @@ subreddit:`https://developers.reddit.com/r/SUBREDDIT/apps/discord-relay`.
       least 3 minutes.
     - **Ignore Removed Items**: If enabled, do not relay items that have been removed.
     - **Retry On Approval**: If enabled, retry relaying items that were removed and not relayed after the delay.
+    - **Comment Delay After Approval**: Number of minutes to delay relaying comments to Discord after approval. This is useful to allow
+      Discord to correctly render the embed. Enter 0 to disable the delay. Must be at least 3 minutes.
+    - **Post Delay After Approval**: Number of minutes to delay relaying posts to Discord after approval. This is useful to allow
+      Discord to correctly render the embed. Enter 0 to disable the delay. Must be at least 3 minutes.
     - **Ignore Safety Checks**: If enabled, skip built-in Reddit safety checks and relay the item to Discord. Useful for
       moderation feeds.
 - **Suppress Item Embed**: If enabled, the embed of the comment/post like being relayed will be suppressed.
@@ -66,6 +70,10 @@ If you have any feedback or suggestions for Discord Relay, file a bug report or 
 [GitHub page](https://github.com/LilSpazJoekp/discord-relay).
 
 ## Changes
+
+### 2.5.0
+
+- Added the ability to introduce a delay before relaying comments and/or posts to Discord after approval.
 
 ### 2.4.1
 

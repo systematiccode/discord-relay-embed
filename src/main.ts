@@ -40,7 +40,9 @@ function isRemoved(target: Comment | Post) {
 }
 
 async function isShadowBanned(context: TriggerContext, target: Comment | Post) {
-    return !(await target.getAuthor())
+    return !(
+        await target.getAuthor()
+    );
 }
 
 Devvit.addSchedulerJob({
@@ -299,6 +301,22 @@ Devvit.addSettings([
             },
             {
                 defaultValue: 0,
+                helpText: `Number of minutes to delay relaying comments to Discord after approval. Enter 0 to disable the delay. Must be at least ${MINIMUM_DELAY} minutes.`,
+                label: "Comment Delay After Approval (in minutes)",
+                name: "comment-delay-after-approval",
+                onValidate: validateDelay,
+                type: "number",
+            },
+            {
+                defaultValue: 0,
+                helpText: `Number of minutes to delay relaying posts to Discord after approval. Enter 0 to disable the delay. Must be at least ${MINIMUM_DELAY} minutes.`,
+                label: "Post Delay After Approval (in minutes)",
+                name: "post-delay-after-approval",
+                onValidate: validateDelay,
+                type: "number",
+            },
+            {
+                defaultValue: 0,
                 helpText: `Score threshold to relay posts to Discord. Ignored if relay mode is set to 'immediately'. Enter 0 to relay when the post appears on the sub's front page.`,
                 label: "Post score threshold",
                 name: "post-score-threshold",
@@ -437,7 +455,7 @@ async function relay(
     await context.redis.hSet(item.id, {relayed: "true"});
 }
 
-async function scheduleRelay(context: TriggerContext, item: Comment | Post, skipDelay: boolean) {
+async function scheduleRelay(context: TriggerContext, item: Comment | Post, approvalRetry: boolean) {
     const {
         redis,
         settings,
@@ -448,7 +466,10 @@ async function scheduleRelay(context: TriggerContext, item: Comment | Post, skip
     const {url: authorUrl, username} = await item.getAuthor() as User;
     const itemType = item instanceof Comment ? "comment" : "post";
     const uniqueId = item instanceof Comment ? `${item.parentId}/${item.id}` : item.id;
-    let delay: number = skipDelay ? 0 : await settings.get(`${itemType}-delay`) || 0;
+    const delayKey = `${itemType}-delay`;
+    let delay: number = await settings.get(delayKey + (
+        approvalRetry ? "-after-approval" : ""
+    )) || 0;
     let suppressAuthorEmbed = await settings.get("suppress-author-embed") || false;
     let suppressItemEmbed = await settings.get("suppress-item-embed") || false;
     let message = `New [${itemType}](${suppressItemEmbed
