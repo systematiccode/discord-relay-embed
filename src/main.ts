@@ -876,6 +876,7 @@ async function scheduleRelay(
 
   if (itemType === "post") {
     const post = item as Post;
+    console.log(post);
     const template = (await settings.get(
       "post-embed-template"
     )) as string | undefined;
@@ -884,18 +885,33 @@ async function scheduleRelay(
       const flairText = post.flair && post.flair.text ? post.flair.text : "";
       const raw = renderTemplate(template, {
         title: post.title ?? "",
-        selftext: (post.selfText as string) ?? "",
+        selftext: (post.selftext as string) ?? "",
         url: redditUrl,
         author: username,
         subreddit: subredditName,
         flair: flairText ?? "",
       });
       description = truncateText(raw, 1024);
-    } else if (post.selfText && (post.selfText as string).trim().length > 0) {
-      description = truncateText(post.selfText as string, 1024);
+    } else if (post.selftext && (post.selftext as string).trim().length > 0) {
+      console.log("Here - 1");
+      console.log(post.selftext);
+            const rawSelfText =
+        ((post as any).selfText ?? (post as any).selftext ?? "") as string;
+
+      const cleanedSelfText = rawSelfText
+        // remove inline image markdown
+        .replace(/!\[[^\]]*\]\([^)]+\)/g, "")
+        // remove excessive empty lines
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+
+      // Now use cleanedSelfText in the embed description
+      description = truncateText(cleanedSelfText, 1024);
     } else {
+      console.log("Here - 2");
       description = "";
     }
+    console.log("Des:", description);
 
     // 🔍 STEP 1: try Devvit preview (this is what originally worked)
     let imageUrl: string | undefined = (post as any).preview?.images?.[0]?.source
