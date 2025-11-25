@@ -84,123 +84,241 @@ function looksLikeImage(url: string | undefined): boolean {
 function getImageUrlFromRedditPostJson(data: any): string | undefined {
   if (!data) return undefined;
 
-  const urlOver: string | undefined = data.url_overridden_by_dest;
+  // Common fields (both Devvit Post + raw JSON)
+  const urlOver: string | undefined =
+    data.url_overridden_by_dest ?? data.urlOverriddenByDest;
   const baseUrl: string | undefined = data.url;
   const previewImage: string | undefined =
     data.preview?.images?.[0]?.source?.url;
 
   const selftext: string = data.selftext || "";
-  const mediaMeta: any = data.media_metadata;
-  const galleryData: any = data.gallery_data;
+  const mediaMeta: any =
+    data.media_metadata ?? data.mediaMetadata ?? undefined;
+  const galleryData: any = data.gallery_data ?? data.galleryData ?? undefined;
 
-  let inlineImage: string | undefined;
-  let galleryImage: string | undefined;
+  // --- Devvit Post shape helpers -------------------------------------
+  const hasDevvitGallery =
+    Array.isArray(data.galleryImages) && data.galleryImages.length > 0;
+  const hasDevvitMedia =
+    Array.isArray(data.mediaUrls) && data.mediaUrls.length > 0;
 
-  // --- inline (text/self) image via media_metadata ---
-  if (mediaMeta && typeof mediaMeta === "object") {
-    for (const key of Object.keys(mediaMeta)) {
-      const md = mediaMeta[key];
-      if (!md) continue;
-      const src = md.s || md.source || {};
-      let u =
-        src.u ||
-        src.url ||
-        (Array.isArray(md.p) && md.p.length
-          ? md.p[md.p.length - 1].u || md.p[md.p.length - 1].url
-          : undefined);
+  const isGalleryPost =
+    data.isGallery === true ||
+    data.type === "gallery" ||
+    data.is_gallery === true; // raw JSON fallback
+
+  const isTextWithInlineImage =
+    (data.isSelf === true || data.is_self === true) &&
+    !isGalleryPost &&
+    (!!mediaMeta || hasDevvitMedia);
+
+  const galleryImages: string[] = [];
+  const mediaUrls: string[] = [];
+
+  // --- 1) Devvit gallery posts (preferred) ---------------------------
+  if (isGalleryPost && hasDevvitGallery) {
+    for (let u of data.galleryImages as string[]) {
       u = decodeUrl(u);
-      if (u && looksLikeImage(u)) {
-        inlineImage = u;
-        break;
-      }
+      if (u && looksLikeImage(u)) galleryImages.push(u);
+    }
+
+    if (galleryImages.length > 0) {
+      const imageUrl = galleryImages[0];
+      console.log("Gallery post image chosen (Devvit)", {
+        imageUrl,
+        galleryImages,
+      });
+      return imageUrl;
     }
   }
 
-  // --- inline from selftext URL ---
-  if (!inlineImage && selftext) {
-    const urlMatch = selftext.match(/https?:\/\/\S+/);
-    if (urlMatch) {
-      let candidate = urlMatch[0].replace(/[)\]]$/, "");
-      candidate = decodeUrl(candidate)!;
-      if (looksLikeImage(candidate)) inlineImage = candidate;
+  // --- 2) Devvit text-with-image posts (preferred) -------------------
+  if (isTextWithInlineImage && hasDevvitMedia) {
+    for (let u of data.mediaUrls as string[]) {
+      u = decodeUrl(u);
+      if (u && looksLikeImage(u)) mediaUrls.push(u);
+    }
+
+    if (mediaUrls.length > 0) {
+      const imageUrl = mediaUrls[0];
+      console.log("Text post inline image chosen (Devvit)", {
+        imageUrl,
+        mediaUrls,
+      });
+      return imageUrl;
     }
   }
 
-  // --- gallery (first image) ---
-  if (galleryData && mediaMeta && Array.isArray(galleryData.items)) {
+  // --- 3) Raw JSON gallery fallback (if you ever pass raw data) ------
+  if (!hasDevvitGallery && galleryData && mediaMeta && Array.isArray(galleryData.items)) {
     for (const item of galleryData.items) {
-      const mid = item.media_id || item.mediaId || item.id;
+      const mid = item.media_id ?? item.mediaId ?? item.id;
       if (!mid) continue;
       const md = mediaMeta[mid];
       if (!md) continue;
+
       const src = md.s || md.source || {};
-      let u =
+      let u: string | undefined =
         src.u ||
         src.url ||
         (Array.isArray(md.p) && md.p.length
           ? md.p[md.p.length - 1].u || md.p[md.p.length - 1].url
           : undefined);
+
       u = decodeUrl(u);
       if (u && looksLikeImage(u)) {
-        galleryImage = u;
-        break;
+        galleryImages.push(u);
+      }
+    }
+
+    if (galleryImages.length > 0) {
+      const imageUrl = galleryImages[0];
+      console.log("Gallery post image chosen (raw JSON)", {
+        imageUrl,
+        galleryImages,
+      });
+      return imageUrl;
+    }
+  }
+
+  // --- 4) Raw JSON-style inline media fallback -----------------------
+  if (!hasDevvitMedia && mediaMeta && typeof mediaMeta === "object") {
+    for (const key of Object.keys(mediaMeta)) {
+      const md = mediaMeta[key];
+      if (!md) continue;
+
+      const src = md.s || md.source || {};
+      let u: string | undefined =
+        src.u ||
+        src.url ||
+        (Array.isArray(md.p) && md.p.length
+          ? md.p[md.p.length - 1].u || md.p[md.p.length - 1].url
+          : undefined);
+
+      u = decodeUrl(u);
+      if (u && looksLikeImage(u)) {
+        mediaUrls.push(u);
       }
     }
   }
 
+  if (!hasDevvitMedia && selftext) {
+    const matches = selftext.match(/https?:\/\/\S+/g) || [];
+    for (let candidate of matches) {
+      candidate = candidate.replace(/[)\]]$/, "");
+      const decoded = decodeUrl(candidate);
+      if (decoded && looksLikeImage(decoded) && !mediaUrls.includes(decoded)) {
+        mediaUrls.push(decoded);
+      }
+    }
+  }
+
+  if (mediaUrls.length > 0) {
+    const imageUrl = mediaUrls[0];
+    console.log("Text post inline image chosen (raw JSON)", {
+      imageUrl,
+      mediaUrls,
+    });
+    return imageUrl;
+  }
+
+  // --- 5) Single-image / generic fallback (your original logic) ------
   let imageUrl: string | undefined;
-  if (looksLikeImage(urlOver)) imageUrl = decodeUrl(urlOver);
-  else if (looksLikeImage(previewImage)) imageUrl = decodeUrl(previewImage);
-  else if (inlineImage) imageUrl = inlineImage;
-  else if (galleryImage) imageUrl = galleryImage;
-  else if (looksLikeImage(baseUrl)) imageUrl = decodeUrl(baseUrl);
+
+  if (looksLikeImage(urlOver)) {
+    imageUrl = decodeUrl(urlOver);
+  } else if (looksLikeImage(previewImage)) {
+    imageUrl = decodeUrl(previewImage);
+  } else if (looksLikeImage(baseUrl)) {
+    imageUrl = decodeUrl(baseUrl);
+  }
 
   console.log("Image candidates", {
+    isGalleryPost,
+    isTextWithInlineImage,
+    hasDevvitGallery,
+    hasDevvitMedia,
     urlOver,
     baseUrl,
     previewImage,
-    inlineImage,
-    galleryImage,
+    galleryImages,
+    mediaUrls,
     final: imageUrl,
   });
 
   return imageUrl;
 }
 
+
+// function fetchImageUrlForPost(
+//   context: TriggerContext,
+//   post: Post
+// ): Promise<string | undefined> {
+//   const permalink = post.permalink;
+//   if (!permalink) return Promise.resolve(undefined);
+
+//   const jsonUrl = `https://www.reddit.com${permalink}.json?raw_json=1`;
+
+//   return (async () => {
+//     try {
+//       // 🔧 FIXED: use correct Devvit HTTP signature
+//       console.log('Action called!');
+//       console.log(jsonUrl);
+//       const resp = await fetch(jsonUrl);
+//       console.log('Test!');
+//       if (resp.status !== 200 || !resp.body) {
+//         console.log(`JSON fetch failed (${resp.status}) for`, jsonUrl);
+//         return undefined;
+//       }
+
+//       console.log(resp.body);
+//       const text = new TextDecoder("utf-8").decode(resp.body);
+//       console.log(text);
+//       const parsed = JSON.parse(text);
+//       console.log(parsed);
+//       const data = parsed?.[0]?.data?.children?.[0]?.data;
+
+//       if (!data) {
+//         console.log("No post data in JSON for", jsonUrl);
+//         return undefined;
+//       }
+
+//       return getImageUrlFromRedditPostJson(data);
+//     } catch (e) {
+//       console.log("Error fetching/parsing post JSON", e);
+//       return undefined;
+//     }
+//   })();
+// }
+
 function fetchImageUrlForPost(
-  context: TriggerContext,
+  _context: TriggerContext,
   post: Post
 ): Promise<string | undefined> {
-  const permalink = post.permalink;
-  if (!permalink) return Promise.resolve(undefined);
-
-  const jsonUrl = `https://www.reddit.com${permalink}.json?raw_json=1`;
-
+  // We already have the full post object; just reuse the same logic
   return (async () => {
     try {
-      // 🔧 FIXED: use correct Devvit HTTP signature
-      const resp = await context.http.get({ url: jsonUrl });
-      if (resp.status !== 200 || !resp.body) {
-        console.log(`JSON fetch failed (${resp.status}) for`, jsonUrl);
-        return undefined;
+      console.log("Action called! Using Post object directly for image lookup.");
+
+      // `getImageUrlFromRedditPostJson` only cares about certain fields
+      // (url, url_overridden_by_dest, preview, media_metadata, gallery_data, selftext)
+      // and the Devvit Post object has the same shape for these.
+      const data: any = post;
+
+      const imageUrl = getImageUrlFromRedditPostJson(data);
+
+      if (!imageUrl) {
+        console.log("No image found from Post data");
       }
 
-      const text = new TextDecoder("utf-8").decode(resp.body);
-      const parsed = JSON.parse(text);
-      const data = parsed?.[0]?.data?.children?.[0]?.data;
-
-      if (!data) {
-        console.log("No post data in JSON for", jsonUrl);
-        return undefined;
-      }
-
-      return getImageUrlFromRedditPostJson(data);
+      return imageUrl;
     } catch (e) {
-      console.log("Error fetching/parsing post JSON", e);
+      console.log("Error resolving image from Post object", e);
       return undefined;
     }
   })();
 }
+
 
 /** settings – unchanged from previous version **/
 Devvit.addSettings([
