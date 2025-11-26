@@ -529,6 +529,14 @@ Devvit.addSettings([
     label: "Native Embed Post Settings",
     fields: [
       {
+        type: "boolean",
+        name: "attachment-mode",
+        label: "Enable attachement mode in discord images",
+        defaultValue: false,
+        helpText:
+          "If enabled, the discord message will show images as attachements than one after another.",
+      },
+      {
         type: "number",
         name: "image-embed-count",
         label: "Max number of images",
@@ -945,22 +953,102 @@ Devvit.addTrigger({
 
 // ---------- Relay + Embed ----------
 
+// async function relay(
+//   context: TriggerContext,
+//   item: Comment | Post,
+//   webhookUrl: string,
+//   data: any
+// ) {
+//   const response = await fetch(webhookUrl, {
+//     method: "POST",
+//     headers: {
+//       "Content-Type": "application/json",
+//     },
+//     body: JSON.stringify(data),
+//   });
+
+//   console.log(
+//     `Webhook response: ${response.status} ${await response.text().catch(() => "")}`
+//   );
+
+//   await context.redis.hSet(item.id, { relayed: "true" });
+// }
+
 async function relay(
   context: TriggerContext,
   item: Comment | Post,
   webhookUrl: string,
   data: any
 ) {
+  // URLs collected in scheduleRelay when `attachment-mode` is true
+  const attachmentUrls: string[] | undefined = (data as any)._imageAttachmentUrls;
+
+  // Build the payload we actually want to send to Discord
+  const payload = {
+    content: data.content,
+    embeds: data.embeds,
+    allowed_mentions: data.allowed_mentions,
+  };
+
+  // --- Case 1: no attachment URLs => old JSON behaviour -------------------
+  if (!attachmentUrls || attachmentUrls.length === 0) {
+    const response = await fetch(webhookUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    console.log(
+      `Webhook response: ${response.status} ${await response
+        .text()
+        .catch(() => "")}`
+    );
+
+    await context.redis.hSet(item.id, { relayed: "true" });
+    return;
+  }
+
+  // --- Case 2: we have attachment URLs => send as files -------------------
+  // Don’t leak helper field to Discord
+  delete (data as any)._imageAttachmentUrls;
+
+  const form = new FormData();
+  form.append("payload_json", JSON.stringify(payload));
+
+  let index = 0;
+  for (const url of attachmentUrls) {
+    if (index >= 10) break; // Discord max 10 attachments
+
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        console.log(
+          `Failed to download image for attachment (HTTP ${resp.status}): ${url}`
+        );
+        continue;
+      }
+
+      const arrayBuffer = await resp.arrayBuffer();
+      const blob = new Blob([arrayBuffer]);
+
+      form.append(`files[${index}]`, blob, `image${index}.png`);
+      index++;
+    } catch (e) {
+      console.log("Failed to download image for attachment:", url, e);
+    }
+  }
+
   const response = await fetch(webhookUrl, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(data),
+    body: form, // FormData sets Content-Type with boundary
   });
 
   console.log(
-    `Webhook response: ${response.status} ${await response.text().catch(() => "")}`
+    `Webhook (attachments) response: ${response.status} ${await response
+      .text()
+      .catch(() => "")}`
   );
 
   await context.redis.hSet(item.id, { relayed: "true" });
@@ -976,7 +1064,7 @@ function hexToInt(hex: string | undefined): number | undefined {
 
 // Helper: map flair background color to a colored emoji block
 function flairColorToEmoji(hex: string | undefined): string {
-  if (!hex) return "⬜"; // default
+  if (!hex) return "⬜";
 
   const clean = hex.replace("#", "");
   if (!/^[0-9A-Fa-f]{6}$/.test(clean)) return "⬜";
@@ -985,16 +1073,345 @@ function flairColorToEmoji(hex: string | undefined): string {
   const g = parseInt(clean.substring(2, 4), 16);
   const b = parseInt(clean.substring(4, 6), 16);
 
-  // crude but good-enough nearest-color mapping
-  if (r > 200 && g < 80 && b < 80) return "🟥"; // red
-  if (g > 200 && r < 80 && b < 80) return "🟩"; // green
-  if (b > 200 && r < 80 && g < 80) return "🟦"; // blue
-  if (r > 200 && g > 200 && b < 80) return "🟨"; // yellow
-  if (r < 80 && g < 80 && b < 80) return "⬛"; // dark
-  if (r > 200 && g > 200 && b > 200) return "⬜"; // light
+  // determine strongest channel
+  const max = Math.max(r, g, b);
 
-  return "⬜"; // fallback
+  // if green is strongest → green
+  if (g === max) return "🟩";
+
+  // if red is strongest → red
+  if (r === max) return "🟥";
+
+  // if blue is strongest → blue
+  if (b === max) return "🟦";
+
+  // default
+  return "⬜";
 }
+
+// async function scheduleRelay(
+//   context: TriggerContext,
+//   item: Comment | Post,
+//   itemType: "post" | "comment",
+//   authorName: string,
+//   approvalRetry: boolean
+// ) {
+//   const { reddit, redis, settings } = context;
+
+//   const webhookUrl = (await settings.get("webhook-url"))!.toString();
+
+//   const username =
+//     authorName ||
+//     (item as any).authorName ||
+//     (item as any).author?.name ||
+//     "unknown";
+
+//   const suppressSubmitter =
+//     (await settings.get("suppress-submitter")) || false;
+//   const authorUrl = suppressSubmitter
+//     ? ""
+//     : `https://www.reddit.com/u/${username}`;
+
+//   const uniqueId =
+//     itemType === "post"
+//       ? item.id
+//       : `${(item as Comment).parentId ?? "unknown"}/${item.id}`;
+
+//   const delayKey =
+//     itemType === "post" ? "post-delay" : "comment-delay";
+//   let delay: number =
+//     (await settings.get(
+//       delayKey + (approvalRetry ? "-after-approval" : "")
+//     )) || 0;
+
+//   const suppressAuthorEmbed =
+//     (await settings.get("suppress-author-embed")) || false;
+//   const suppressItemEmbed =
+//     (await settings.get("suppress-item-embed")) || false;
+
+//   const redditUrl = `https://www.reddit.com${item.permalink}`;
+
+//   // 🔢 How many images to embed
+//   const rawImageEmbedCount = (await settings.get("image-embed-count")) ?? 1;
+//   const imageEmbedCount = Math.max(0, Number(rawImageEmbedCount) || 0);
+
+//   let message = `New [${itemType}](${
+//     suppressItemEmbed ? "<" : ""
+//   }${redditUrl}${suppressItemEmbed ? ">" : ""}) by [u/${username}](${
+//     suppressAuthorEmbed ? "<" : ""
+//   }${authorUrl}${suppressAuthorEmbed ? ">" : ""})!`;
+
+//   if (await settings.get("ping-role")) {
+//     const roleId = await settings.get("ping-role-id");
+//     if (roleId) {
+//       message = `${message}\n<@&${roleId}>`;
+//     }
+//   }
+
+//   const data: any = {
+//     content: message,
+//     allowed_mentions: {
+//       parse: ["roles", "users", "everyone"],
+//     },
+//   };
+
+//   // ---------- Embed building ----------
+//   if (!suppressItemEmbed) {
+//     const subreddit: Subreddit = await reddit.getCurrentSubreddit();
+//     const subredditName = subreddit.name;
+
+//     let description = "";
+//     let imageUrls: string[] = [];
+
+//     // flair-related vars (used for posts only)
+//     let flairText = "";
+//     let flairBackground = "";
+//     let flairTextColor: "light" | "dark" | undefined;
+//     let flairLabel = "";
+//     let embedColor: number | undefined;
+
+//     if (itemType === "post") {
+//       const post = item as Post;
+
+//       // 🔹 Read flair from linkFlair (preferred) or flair (fallback)
+//       const linkFlair =
+//         (post as any).linkFlair ??
+//         (post as any).flair ??
+//         null;
+
+//       if (linkFlair) {
+//         flairText = linkFlair.text ?? "";
+//         flairBackground = linkFlair.backgroundColor ?? "";
+//         flairTextColor = linkFlair.textColor ?? "dark";
+//       }
+
+//       // 🔹 Default flair background if empty
+//       if (!flairBackground || flairBackground.trim() === "") {
+//         flairBackground = "#808080"; // default background color
+//       }
+
+//       // 🔹 Emoji color block based on flair background
+//       let flairEmoji = "";
+//       if (flairText) {
+//         flairEmoji = flairColorToEmoji(flairBackground);
+//         flairLabel = `${flairEmoji} **${flairText}**`;
+//       }
+
+//       // 🔹 Convert background hex to Discord color int (for embed border)
+//       embedColor = hexToInt(flairBackground);
+
+//       const template = (await settings.get(
+//         "post-embed-template"
+//       )) as string | undefined;
+
+//       let descBody = "";
+
+//       if (template && template.trim().length > 0) {
+//         const raw = renderTemplate(template, {
+//           title: post.title ?? "",
+//           selftext: (post.selftext as string) ?? "",
+//           url: redditUrl,
+//           author: username,
+//           subreddit: subredditName,
+//           flair: flairText ?? "",
+//         });
+//         descBody = truncateText(raw, 1024);
+//       } else if (post.selftext && (post.selftext as string).trim().length > 0) {
+//         const rawSelfText =
+//           ((post as any).selfText ?? (post as any).selftext ?? "") as string;
+
+//         const cleanedSelfText = rawSelfText
+//           // remove inline image markdown
+//           .replace(/!\[[^\]]*\]\([^)]+\)/g, "")
+//           // remove excessive empty lines
+//           .replace(/\n{3,}/g, "\n\n")
+//           .trim();
+
+//         descBody = truncateText(cleanedSelfText, 1024);
+//       } else {
+//         descBody = "";
+//       }
+
+//       // 🔹 Combine flair label + body into description
+//       if (flairLabel && descBody) {
+//         description = `${flairLabel}\n\n${descBody}`;
+//       } else if (flairLabel) {
+//         description = flairLabel;
+//       } else {
+//         description = descBody;
+//       }
+
+//       // 🔍 IMAGE LOGIC
+//       if (imageEmbedCount === 1) {
+//         // Single image mode → existing helper
+//         const single = await fetchImageUrlForPost(context, post);
+//         if (single) {
+//           imageUrls = [single];
+//         }
+//       } else if (imageEmbedCount > 1) {
+//         // Multi-image mode → multi helper
+//         const many = await fetchImageUrlsForPost(context, post);
+//         if (many && many.length > 0) {
+//           imageUrls = many.slice(0, imageEmbedCount);
+//         }
+//       }
+
+//       // If there is no body and no images, show the link so it’s at least clickable
+//       if (!description && post.url && imageUrls.length === 0) {
+//         description = `🔗 ${post.url}`;
+//       }
+
+//       console.log("Final image URLs for embed (post)", {
+//         id: post.id,
+//         permalink: post.permalink,
+//         imageEmbedCount,
+//         imageUrls,
+//       });
+//     } else {
+//       // Comment
+//       const comment = item as Comment;
+
+//       const linkId =
+//         (comment as any).linkId ??
+//         (comment as any).postId ??
+//         undefined;
+
+//       let parentPostTitle = "";
+//       if (linkId) {
+//         try {
+//           const parentPost = await reddit.getPostById(linkId);
+//           parentPostTitle = parentPost?.title ?? "";
+//         } catch (e) {
+//           console.log("Error fetching parent post for comment:", e);
+//         }
+//       }
+
+//       const template = (await settings.get(
+//         "comment-embed-template"
+//       )) as string | undefined;
+
+//       if (template && template.trim().length > 0) {
+//         const raw = renderTemplate(template, {
+//           body: (comment.body as string) ?? "",
+//           postTitle: parentPostTitle,
+//           url: redditUrl,
+//           author: username,
+//           subreddit: subredditName,
+//         });
+//         description = truncateText(raw, 2000);
+//       } else {
+//         description = truncateText(comment.body as string, 2000);
+//       }
+//     }
+
+//     // ---------- Shared title logic (with flair in title for posts) ----------
+//     let title: string;
+//     if (itemType === "post") {
+//       const post = item as Post;
+//       const baseTitle = post.title ?? "";
+//       title = truncateText(baseTitle, 256);
+//     } else {
+//       const comment = item as Comment;
+//       const linkId =
+//         (comment as any).linkId ??
+//         (comment as any).postId ??
+//         undefined;
+
+//       let parentPostTitle = "";
+//       if (linkId) {
+//         try {
+//           const parentPost = await reddit.getPostById(linkId);
+//           parentPostTitle = parentPost?.title ?? "";
+//         } catch (e) {
+//           console.log("Error fetching parent post title for comment:", e);
+//         }
+//       }
+//       title = truncateText(`New comment on: ${parentPostTitle}`, 256);
+//     }
+//     // -----------------------------------------------------------------
+
+//     const footer = {
+//       text: `r/${subredditName}`,
+//     };
+//     const timestamp = new Date().toISOString();
+
+//     const embed: any = {
+//       title,
+//       url: redditUrl,
+//       description,
+//       author: {
+//         name: `u/${username}`,
+//         ...(suppressAuthorEmbed ? {} : { url: authorUrl }),
+//       },
+//       ...(embedColor ? { color: embedColor } : {}), // flair-based border color for posts
+//       // footer + timestamp added to last embed below
+//     };
+
+//     // Attach first image (if any) to the main embed for posts
+//     if (itemType === "post" && imageUrls.length > 0) {
+//       embed.image = { url: imageUrls[0] };
+//     }
+
+//     if (data.embeds && data.embeds.length > 0) {
+//       data.embeds[0] = { ...data.embeds[0], ...embed };
+//     } else {
+//       data.embeds = [embed];
+//     }
+
+//     // Extra image embeds (post only, if more than 1 image)
+//     if (itemType === "post" && imageUrls.length > 1) {
+//       const extraEmbeds = imageUrls.slice(1).map((url) => ({
+//         image: { url },
+//         ...(embedColor ? { color: embedColor } : {}),
+//       }));
+//       data.embeds = [...(data.embeds || []), ...extraEmbeds];
+//     }
+
+//     // ✅ Footer + timestamp on the LAST embed only
+//     if (data.embeds && data.embeds.length > 0) {
+//       const lastIndex = data.embeds.length - 1;
+//       data.embeds[lastIndex] = {
+//         ...data.embeds[lastIndex],
+//         footer,
+//         timestamp,
+//       };
+//     }
+//   }
+//   // ---------- /Embed building ----------
+
+//   if (delay == 0) {
+//     console.log(`Relaying event ${uniqueId}`);
+//     if ((await settings.get("ignore-removed")) && isRemoved(item)) {
+//       console.log(`Not relaying due to item removed: ${uniqueId}`);
+//       return;
+//     }
+//     await relay(context, item, webhookUrl, data);
+//   } else {
+//     const runAt = new Date(Date.now() + delay * 60 * 1000);
+//     console.log(
+//       `Scheduling relay (${uniqueId}) for ${delay} minutes from now (${runAt})`
+//     );
+
+//     if ((await redis.hGet(item.id, "scheduled")) === "true") {
+//       console.log(`Relay job already scheduled for ${uniqueId}`);
+//       return;
+//     }
+
+//     await context.scheduler.runJob({
+//       name: RELAY_SCHEDULED_JOB,
+//       data: {
+//         data,
+//         itemType,
+//         itemId: item.id,
+//         uniqueId,
+//         webhookUrl,
+//       },
+//       runAt,
+//     });
+//   }
+
+//   await redis.hSet(item.id, { scheduled: "true" });
+// }
 
 async function scheduleRelay(
   context: TriggerContext,
@@ -1038,9 +1455,12 @@ async function scheduleRelay(
 
   const redditUrl = `https://www.reddit.com${item.permalink}`;
 
-  // 🔢 How many images to embed
+  // 🔢 How many images to embed / attach
   const rawImageEmbedCount = (await settings.get("image-embed-count")) ?? 1;
   const imageEmbedCount = Math.max(0, Number(rawImageEmbedCount) || 0);
+
+  // 🧷 New: attachment-mode (if true we send images as Discord attachments)
+  const attachmentMode = !!(await settings.get("attachment-mode"));
 
   let message = `New [${itemType}](${
     suppressItemEmbed ? "<" : ""
@@ -1168,12 +1588,19 @@ async function scheduleRelay(
         description = `🔗 ${post.url}`;
       }
 
-      console.log("Final image URLs for embed (post)", {
+      console.log("Final image URLs for post", {
         id: post.id,
         permalink: post.permalink,
         imageEmbedCount,
         imageUrls,
+        attachmentMode,
       });
+
+      // If attachment mode is on and we have images, stash them so relay()
+      // can send them as real Discord attachments (grouped carousel/grid).
+      if (attachmentMode && imageUrls.length > 0) {
+        (data as any)._imageAttachmentUrls = imageUrls;
+      }
     } else {
       // Comment
       const comment = item as Comment;
@@ -1211,7 +1638,7 @@ async function scheduleRelay(
       }
     }
 
-    // ---------- Shared title logic (with flair in title for posts) ----------
+    // ---------- Shared title logic ----------
     let title: string;
     if (itemType === "post") {
       const post = item as Post;
@@ -1255,7 +1682,8 @@ async function scheduleRelay(
     };
 
     // Attach first image (if any) to the main embed for posts
-    if (itemType === "post" && imageUrls.length > 0) {
+    // ✅ Only when NOT in attachmentMode (otherwise we use attachments instead)
+    if (itemType === "post" && imageUrls.length > 0 && !attachmentMode) {
       embed.image = { url: imageUrls[0] };
     }
 
@@ -1265,8 +1693,14 @@ async function scheduleRelay(
       data.embeds = [embed];
     }
 
-    // Extra image embeds (post only, if more than 1 image)
-    if (itemType === "post" && imageUrls.length > 1) {
+    // Extra image embeds (post only, if more than 1 image) — again ONLY when
+    // attachmentMode is OFF. When attachmentMode is ON we want Discord to
+    // group them as attachments instead.
+    if (
+      itemType === "post" &&
+      imageUrls.length > 1 &&
+      !attachmentMode
+    ) {
       const extraEmbeds = imageUrls.slice(1).map((url) => ({
         image: { url },
         ...(embedColor ? { color: embedColor } : {}),
@@ -1319,7 +1753,6 @@ async function scheduleRelay(
 
   await redis.hSet(item.id, { scheduled: "true" });
 }
-
 
 async function shouldRelay(
   event: any,
