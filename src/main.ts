@@ -468,7 +468,6 @@ function fetchImageUrlsForPost(
   })();
 }
 
-
 /** settings – unchanged from previous version **/
 Devvit.addSettings([
   {
@@ -967,546 +966,35 @@ async function relay(
   await context.redis.hSet(item.id, { relayed: "true" });
 }
 
-// async function scheduleRelay(
-//   context: TriggerContext,
-//   item: Comment | Post,
-//   itemType: "post" | "comment",
-//   authorName: string,
-//   approvalRetry: boolean
-// ) {
-//   const { reddit, redis, settings } = context;
-
-//   const webhookUrl = (await settings.get("webhook-url"))!.toString();
-
-//   const username =
-//     authorName ||
-//     (item as any).authorName ||
-//     (item as any).author?.name ||
-//     "unknown";
-
-//   const suppressSubmitter =
-//     (await settings.get("suppress-submitter")) || false;
-//   const authorUrl = suppressSubmitter
-//     ? ""
-//     : `https://www.reddit.com/u/${username}`;
-
-//   const uniqueId =
-//     itemType === "post"
-//       ? item.id
-//       : `${(item as Comment).parentId ?? "unknown"}/${item.id}`;
-
-//   const delayKey =
-//     itemType === "post" ? "post-delay" : "comment-delay";
-//   let delay: number =
-//     (await settings.get(
-//       delayKey + (approvalRetry ? "-after-approval" : "")
-//     )) || 0;
-
-//   const suppressAuthorEmbed =
-//     (await settings.get("suppress-author-embed")) || false;
-//   const suppressItemEmbed =
-//     (await settings.get("suppress-item-embed")) || false;
-
-//   const redditUrl = `https://www.reddit.com${item.permalink}`;
-
-//   let message = `New [${itemType}](${
-//     suppressItemEmbed ? "<" : ""
-//   }${redditUrl}${suppressItemEmbed ? ">" : ""}) by [u/${username}](${
-//     suppressAuthorEmbed ? "<" : ""
-//   }${authorUrl}${suppressAuthorEmbed ? ">" : ""})!`;
-
-//   if (await settings.get("ping-role")) {
-//     const roleId = await settings.get("ping-role-id");
-//     if (roleId) {
-//       message = `${message}\n<@&${roleId}>`;
-//     }
-//   }
-
-//   const data: any = {
-//     content: message,
-//     allowed_mentions: {
-//       parse: ["roles", "users", "everyone"],
-//     },
-//   };
-
-//   // ---------- Embed building ----------
-//   if (!suppressItemEmbed) {
-//     const subreddit: Subreddit = await reddit.getCurrentSubreddit();
-//     const subredditName = subreddit.name;
-
-//     let description = "";
-
-//   if (itemType === "post") {
-//     const post = item as Post;
-//     console.log(post);
-//     const template = (await settings.get(
-//       "post-embed-template"
-//     )) as string | undefined;
-
-//     if (template && template.trim().length > 0) {
-//       const flairText = post.flair && post.flair.text ? post.flair.text : "";
-//       const raw = renderTemplate(template, {
-//         title: post.title ?? "",
-//         selftext: (post.selftext as string) ?? "",
-//         url: redditUrl,
-//         author: username,
-//         subreddit: subredditName,
-//         flair: flairText ?? "",
-//       });
-//       description = truncateText(raw, 1024);
-//     } else if (post.selftext && (post.selftext as string).trim().length > 0) {
-//       console.log("Here - 1");
-//       console.log(post.selftext);
-//             const rawSelfText =
-//         ((post as any).selfText ?? (post as any).selftext ?? "") as string;
-
-//       const cleanedSelfText = rawSelfText
-//         // remove inline image markdown
-//         .replace(/!\[[^\]]*\]\([^)]+\)/g, "")
-//         // remove excessive empty lines
-//         .replace(/\n{3,}/g, "\n\n")
-//         .trim();
-
-//       // Now use cleanedSelfText in the embed description
-//       description = truncateText(cleanedSelfText, 1024);
-//     } else {
-//       console.log("Here - 2");
-//       description = "";
-//     }
-//     console.log("Des:", description);
-
-//     // 🔍 STEP 1: try Devvit preview (this is what originally worked)
-//     let imageUrl: string | undefined = (post as any).preview?.images?.[0]?.source
-//       ?.url;
-
-//     if (!imageUrl && post.url && looksLikeImage(post.url as string)) {
-//       // 🔍 STEP 2: fall back to direct post.url if it looks like an image
-//       imageUrl = decodeUrl(post.url as string);
-//     }
-
-//     // 🔍 STEP 3: only if we STILL don't have an image, use the JSON/gallery helper
-//     if (!imageUrl) {
-//       imageUrl = await fetchImageUrlForPost(context, post);
-//     }
-
-//     // If there is no body and no image, show the link so it’s at least clickable
-//     if (!description && post.url && !imageUrl) {
-//       description = `🔗 ${post.url}`;
-//     }
-
-//     console.log("Final imageUrl for embed (post)", {
-//       id: post.id,
-//       permalink: post.permalink,
-//       preview: (post as any).preview?.images?.[0]?.source?.url,
-//       url: post.url,
-//       imageUrl,
-//     });
-
-//     if (imageUrl) {
-//       if (!data.embeds || data.embeds.length === 0) {
-//         data.embeds = [{}];
-//       }
-//       data.embeds[0].image = { url: imageUrl };
-//     }
-//   } else {
-//       // Comment
-//       const comment = item as Comment;
-
-//       // ensure we can get parent post for title
-//       const linkId =
-//         (comment as any).linkId ??
-//         (comment as any).postId ??
-//         undefined;
-
-//       let parentPostTitle = "";
-//       if (linkId) {
-//         try {
-//           const parentPost = await reddit.getPostById(linkId);
-//           parentPostTitle = parentPost?.title ?? "";
-//         } catch (e) {
-//           console.log("Error fetching parent post for comment:", e);
-//         }
-//       }
-
-//       const template = (await settings.get(
-//         "comment-embed-template"
-//       )) as string | undefined;
-
-//       if (template && template.trim().length > 0) {
-//         const raw = renderTemplate(template, {
-//           body: (comment.body as string) ?? "",
-//           postTitle: parentPostTitle,
-//           url: redditUrl,
-//           author: username,
-//           subreddit: subredditName,
-//         });
-//         description = truncateText(raw, 2000);
-//       } else {
-//         description = truncateText(comment.body as string, 2000);
-//       }
-//     }
-
-//     let title: string;
-//     if (itemType === "post") {
-//       const post = item as Post;
-//       title = truncateText(post.title, 256);
-//     } else {
-//       const comment = item as Comment;
-//       const linkId =
-//         (comment as any).linkId ??
-//         (comment as any).postId ??
-//         undefined;
-
-//       let parentPostTitle = "";
-//       if (linkId) {
-//         try {
-//           const parentPost = await reddit.getPostById(linkId);
-//           parentPostTitle = parentPost?.title ?? "";
-//         } catch (e) {
-//           console.log("Error fetching parent post title for comment:", e);
-//         }
-//       }
-//       title = truncateText(`New comment on: ${parentPostTitle}`, 256);
-//     }
-
-//     const embed: any = {
-//       title,
-//       url: redditUrl,
-//       description,
-//       author: {
-//         name: `u/${username}`,
-//         ...(suppressAuthorEmbed ? {} : { url: authorUrl }),
-//       },
-//       footer: {
-//         text: `r/${subredditName}`,
-//       },
-//       timestamp: new Date().toISOString(),
-//     };
-
-//     if (data.embeds && data.embeds.length > 0) {
-//       data.embeds[0] = { ...data.embeds[0], ...embed };
-//     } else {
-//       data.embeds = [embed];
-//     }
-//   }
-//   // ---------- /Embed building ----------
-
-//   if (delay == 0) {
-//     console.log(`Relaying event ${uniqueId}`);
-//     if ((await settings.get("ignore-removed")) && isRemoved(item)) {
-//       console.log(`Not relaying due to item removed: ${uniqueId}`);
-//       return;
-//     }
-//     await relay(context, item, webhookUrl, data);
-//   } else {
-//     const runAt = new Date(Date.now() + delay * 60 * 1000);
-//     console.log(
-//       `Scheduling relay (${uniqueId}) for ${delay} minutes from now (${runAt})`
-//     );
-
-//     if ((await redis.hGet(item.id, "scheduled")) === "true") {
-//       console.log(`Relay job already scheduled for ${uniqueId}`);
-//       return;
-//     }
-
-//     await context.scheduler.runJob({
-//       name: RELAY_SCHEDULED_JOB,
-//       data: {
-//         data,
-//         itemType,
-//         itemId: item.id,
-//         uniqueId,
-//         webhookUrl,
-//       },
-//       runAt,
-//     });
-//   }
-
-//   await redis.hSet(item.id, { scheduled: "true" });
-// }
-
-// async function scheduleRelay(
-//   context: TriggerContext,
-//   item: Comment | Post,
-//   itemType: "post" | "comment",
-//   authorName: string,
-//   approvalRetry: boolean
-// ) {
-//   const { reddit, redis, settings } = context;
-
-//   const webhookUrl = (await settings.get("webhook-url"))!.toString();
-
-//   const username =
-//     authorName ||
-//     (item as any).authorName ||
-//     (item as any).author?.name ||
-//     "unknown";
-
-//   const suppressSubmitter =
-//     (await settings.get("suppress-submitter")) || false;
-//   const authorUrl = suppressSubmitter
-//     ? ""
-//     : `https://www.reddit.com/u/${username}`;
-
-//   const uniqueId =
-//     itemType === "post"
-//       ? item.id
-//       : `${(item as Comment).parentId ?? "unknown"}/${item.id}`;
-
-//   const delayKey =
-//     itemType === "post" ? "post-delay" : "comment-delay";
-//   let delay: number =
-//     (await settings.get(
-//       delayKey + (approvalRetry ? "-after-approval" : "")
-//     )) || 0;
-
-//   const suppressAuthorEmbed =
-//     (await settings.get("suppress-author-embed")) || false;
-//   const suppressItemEmbed =
-//     (await settings.get("suppress-item-embed")) || false;
-
-//   const redditUrl = `https://www.reddit.com${item.permalink}`;
-
-//   // 🔢 New: how many images to embed
-//   const rawImageEmbedCount = (await settings.get("image-embed-count")) ?? 1;
-//   const imageEmbedCount = Math.max(0, Number(rawImageEmbedCount) || 0);
-
-//   let message = `New [${itemType}](${
-//     suppressItemEmbed ? "<" : ""
-//   }${redditUrl}${suppressItemEmbed ? ">" : ""}) by [u/${username}](${
-//     suppressAuthorEmbed ? "<" : ""
-//   }${authorUrl}${suppressAuthorEmbed ? ">" : ""})!`;
-
-//   if (await settings.get("ping-role")) {
-//     const roleId = await settings.get("ping-role-id");
-//     if (roleId) {
-//       message = `${message}\n<@&${roleId}>`;
-//     }
-//   }
-
-//   const data: any = {
-//     content: message,
-//     allowed_mentions: {
-//       parse: ["roles", "users", "everyone"],
-//     },
-//   };
-
-//   // ---------- Embed building ----------
-//   if (!suppressItemEmbed) {
-//     const subreddit: Subreddit = await reddit.getCurrentSubreddit();
-//     const subredditName = subreddit.name;
-
-//     let description = "";
-//     // will hold one or more image URLs for posts
-//     let imageUrls: string[] = [];
-
-//     if (itemType === "post") {
-//       const post = item as Post;
-//       console.log(post);
-//       const template = (await settings.get(
-//         "post-embed-template"
-//       )) as string | undefined;
-
-//       if (template && template.trim().length > 0) {
-//         const flairText =
-//           post.flair && post.flair.text ? post.flair.text : "";
-//         const raw = renderTemplate(template, {
-//           title: post.title ?? "",
-//           selftext: (post.selftext as string) ?? "",
-//           url: redditUrl,
-//           author: username,
-//           subreddit: subredditName,
-//           flair: flairText ?? "",
-//         });
-//         description = truncateText(raw, 1024);
-//       } else if (post.selftext && (post.selftext as string).trim().length > 0) {
-//         console.log("Here - 1");
-//         console.log(post.selftext);
-//         const rawSelfText =
-//           ((post as any).selfText ?? (post as any).selftext ?? "") as string;
-
-//         const cleanedSelfText = rawSelfText
-//           // remove inline image markdown
-//           .replace(/!\[[^\]]*\]\([^)]+\)/g, "")
-//           // remove excessive empty lines
-//           .replace(/\n{3,}/g, "\n\n")
-//           .trim();
-
-//         // Now use cleanedSelfText in the embed description
-//         description = truncateText(cleanedSelfText, 1024);
-//       } else {
-//         console.log("Here - 2");
-//         description = "";
-//       }
-//       console.log("Des:", description);
-
-//       // 🔍 NEW IMAGE LOGIC (replaces old imageUrl logic)
-//       if (imageEmbedCount === 1) {
-//         // Single image mode → use existing helper
-//         const single = await fetchImageUrlForPost(context, post);
-//         if (single) {
-//           imageUrls = [single];
-//         }
-//       } else if (imageEmbedCount > 1) {
-//         // Multi-image mode → use new multi helper
-//         const many = await fetchImageUrlsForPost(context, post);
-//         if (many && many.length > 0) {
-//           imageUrls = many.slice(0, imageEmbedCount);
-//         }
-//       }
-
-//       // If there is no body and no images, show the link so it’s at least clickable
-//       if (!description && post.url && imageUrls.length === 0) {
-//         description = `🔗 ${post.url}`;
-//       }
-
-//       console.log("Final image URLs for embed (post)", {
-//         id: post.id,
-//         permalink: post.permalink,
-//         imageEmbedCount,
-//         imageUrls,
-//       });
-
-//       // store on data so we can access after embed construction if needed
-//       (data as any)._imageUrls = imageUrls;
-//     } else {
-//       // Comment
-//       const comment = item as Comment;
-
-//       // ensure we can get parent post for title
-//       const linkId =
-//         (comment as any).linkId ??
-//         (comment as any).postId ??
-//         undefined;
-
-//       let parentPostTitle = "";
-//       if (linkId) {
-//         try {
-//           const parentPost = await reddit.getPostById(linkId);
-//           parentPostTitle = parentPost?.title ?? "";
-//         } catch (e) {
-//           console.log("Error fetching parent post for comment:", e);
-//         }
-//       }
-
-//       const template = (await settings.get(
-//         "comment-embed-template"
-//       )) as string | undefined;
-
-//       if (template && template.trim().length > 0) {
-//         const raw = renderTemplate(template, {
-//           body: (comment.body as string) ?? "",
-//           postTitle: parentPostTitle,
-//           url: redditUrl,
-//           author: username,
-//           subreddit: subredditName,
-//         });
-//         description = truncateText(raw, 2000);
-//       } else {
-//         description = truncateText(comment.body as string, 2000);
-//       }
-//     }
-
-//     let title: string;
-//     if (itemType === "post") {
-//       const post = item as Post;
-//       title = truncateText(post.title, 256);
-//     } else {
-//       const comment = item as Comment;
-//       const linkId =
-//         (comment as any).linkId ??
-//         (comment as any).postId ??
-//         undefined;
-
-//       let parentPostTitle = "";
-//       if (linkId) {
-//         try {
-//           const parentPost = await reddit.getPostById(linkId);
-//           parentPostTitle = parentPost?.title ?? "";
-//         } catch (e) {
-//           console.log("Error fetching parent post title for comment:", e);
-//         }
-//       }
-//       title = truncateText(`New comment on: ${parentPostTitle}`, 256);
-//     }
-
-//     // Re-read imageUrls for posts from data._imageUrls
-//     const finalImageUrls: string[] =
-//       itemType === "post" && (data as any)._imageUrls
-//         ? ((data as any)._imageUrls as string[])
-//         : [];
-
-//     const embed: any = {
-//       title,
-//       url: redditUrl,
-//       description,
-//       author: {
-//         name: `u/${username}`,
-//         ...(suppressAuthorEmbed ? {} : { url: authorUrl }),
-//       },
-//       footer: {
-//         text: `r/${subredditName}`,
-//       },
-//       timestamp: new Date().toISOString(),
-//     };
-
-//     // Attach first image (if any) to the main embed for posts
-//     if (itemType === "post" && finalImageUrls.length > 0) {
-//       embed.image = { url: finalImageUrls[0] };
-//     }
-
-//     if (data.embeds && data.embeds.length > 0) {
-//       data.embeds[0] = { ...data.embeds[0], ...embed };
-//     } else {
-//       data.embeds = [embed];
-//     }
-
-//     // Extra image embeds (post only, if more than 1 image)
-//     if (itemType === "post" && finalImageUrls.length > 1) {
-//       const extraEmbeds = finalImageUrls.slice(1).map((url) => ({
-//         image: { url },
-//       }));
-//       data.embeds = [...(data.embeds || []), ...extraEmbeds];
-//     }
-
-//     // clean up helper field
-//     delete (data as any)._imageUrls;
-//   }
-//   // ---------- /Embed building ----------
-
-//   if (delay == 0) {
-//     console.log(`Relaying event ${uniqueId}`);
-//     if ((await settings.get("ignore-removed")) && isRemoved(item)) {
-//       console.log(`Not relaying due to item removed: ${uniqueId}`);
-//       return;
-//     }
-//     await relay(context, item, webhookUrl, data);
-//   } else {
-//     const runAt = new Date(Date.now() + delay * 60 * 1000);
-//     console.log(
-//       `Scheduling relay (${uniqueId}) for ${delay} minutes from now (${runAt})`
-//     );
-
-//     if ((await redis.hGet(item.id, "scheduled")) === "true") {
-//       console.log(`Relay job already scheduled for ${uniqueId}`);
-//       return;
-//     }
-
-//     await context.scheduler.runJob({
-//       name: RELAY_SCHEDULED_JOB,
-//       data: {
-//         data,
-//         itemType,
-//         itemId: item.id,
-//         uniqueId,
-//         webhookUrl,
-//       },
-//       runAt,
-//     });
-//   }
-
-//   await redis.hSet(item.id, { scheduled: "true" });
-// }
+// Helper: convert "#RRGGBB" to Discord int color
+function hexToInt(hex: string | undefined): number | undefined {
+  if (!hex) return undefined;
+  const clean = hex.replace("#", "");
+  if (!/^[0-9A-Fa-f]{6}$/.test(clean)) return undefined;
+  return parseInt(clean, 16);
+}
+
+// Helper: map flair background color to a colored emoji block
+function flairColorToEmoji(hex: string | undefined): string {
+  if (!hex) return "⬜"; // default
+
+  const clean = hex.replace("#", "");
+  if (!/^[0-9A-Fa-f]{6}$/.test(clean)) return "⬜";
+
+  const r = parseInt(clean.substring(0, 2), 16);
+  const g = parseInt(clean.substring(2, 4), 16);
+  const b = parseInt(clean.substring(4, 6), 16);
+
+  // crude but good-enough nearest-color mapping
+  if (r > 200 && g < 80 && b < 80) return "🟥"; // red
+  if (g > 200 && r < 80 && b < 80) return "🟩"; // green
+  if (b > 200 && r < 80 && g < 80) return "🟦"; // blue
+  if (r > 200 && g > 200 && b < 80) return "🟨"; // yellow
+  if (r < 80 && g < 80 && b < 80) return "⬛"; // dark
+  if (r > 200 && g > 200 && b > 200) return "⬜"; // light
+
+  return "⬜"; // fallback
+}
 
 async function scheduleRelay(
   context: TriggerContext,
@@ -1550,7 +1038,7 @@ async function scheduleRelay(
 
   const redditUrl = `https://www.reddit.com${item.permalink}`;
 
-  // 🔢 New: how many images to embed
+  // 🔢 How many images to embed
   const rawImageEmbedCount = (await settings.get("image-embed-count")) ?? 1;
   const imageEmbedCount = Math.max(0, Number(rawImageEmbedCount) || 0);
 
@@ -1582,16 +1070,50 @@ async function scheduleRelay(
     let description = "";
     let imageUrls: string[] = [];
 
+    // flair-related vars (used for posts only)
+    let flairText = "";
+    let flairBackground = "";
+    let flairTextColor: "light" | "dark" | undefined;
+    let flairLabel = "";
+    let embedColor: number | undefined;
+
     if (itemType === "post") {
       const post = item as Post;
-      console.log(post);
+
+      // 🔹 Read flair from linkFlair (preferred) or flair (fallback)
+      const linkFlair =
+        (post as any).linkFlair ??
+        (post as any).flair ??
+        null;
+
+      if (linkFlair) {
+        flairText = linkFlair.text ?? "";
+        flairBackground = linkFlair.backgroundColor ?? "";
+        flairTextColor = linkFlair.textColor ?? "dark";
+      }
+
+      // 🔹 Default flair background if empty
+      if (!flairBackground || flairBackground.trim() === "") {
+        flairBackground = "#808080"; // default background color
+      }
+
+      // 🔹 Emoji color block based on flair background
+      let flairEmoji = "";
+      if (flairText) {
+        flairEmoji = flairColorToEmoji(flairBackground);
+        flairLabel = `${flairEmoji} **${flairText}**`;
+      }
+
+      // 🔹 Convert background hex to Discord color int (for embed border)
+      embedColor = hexToInt(flairBackground);
 
       const template = (await settings.get(
         "post-embed-template"
       )) as string | undefined;
 
+      let descBody = "";
+
       if (template && template.trim().length > 0) {
-        const flairText = post.flair && post.flair.text ? post.flair.text : "";
         const raw = renderTemplate(template, {
           title: post.title ?? "",
           selftext: (post.selftext as string) ?? "",
@@ -1600,11 +1122,8 @@ async function scheduleRelay(
           subreddit: subredditName,
           flair: flairText ?? "",
         });
-        description = truncateText(raw, 1024);
+        descBody = truncateText(raw, 1024);
       } else if (post.selftext && (post.selftext as string).trim().length > 0) {
-        console.log("Here - 1");
-        console.log(post.selftext);
-
         const rawSelfText =
           ((post as any).selfText ?? (post as any).selftext ?? "") as string;
 
@@ -1615,15 +1134,21 @@ async function scheduleRelay(
           .replace(/\n{3,}/g, "\n\n")
           .trim();
 
-        description = truncateText(cleanedSelfText, 1024);
+        descBody = truncateText(cleanedSelfText, 1024);
       } else {
-        console.log("Here - 2");
-        description = "";
+        descBody = "";
       }
 
-      console.log("Des:", description);
+      // 🔹 Combine flair label + body into description
+      if (flairLabel && descBody) {
+        description = `${flairLabel}\n\n${descBody}`;
+      } else if (flairLabel) {
+        description = flairLabel;
+      } else {
+        description = descBody;
+      }
 
-      // 🔍 NEW IMAGE LOGIC
+      // 🔍 IMAGE LOGIC
       if (imageEmbedCount === 1) {
         // Single image mode → existing helper
         const single = await fetchImageUrlForPost(context, post);
@@ -1631,7 +1156,7 @@ async function scheduleRelay(
           imageUrls = [single];
         }
       } else if (imageEmbedCount > 1) {
-        // Multi-image mode → new multi helper
+        // Multi-image mode → multi helper
         const many = await fetchImageUrlsForPost(context, post);
         if (many && many.length > 0) {
           imageUrls = many.slice(0, imageEmbedCount);
@@ -1686,11 +1211,12 @@ async function scheduleRelay(
       }
     }
 
-    // Shared title logic
+    // ---------- Shared title logic (with flair in title for posts) ----------
     let title: string;
     if (itemType === "post") {
       const post = item as Post;
-      title = truncateText(post.title, 256);
+      const baseTitle = post.title ?? "";
+      title = truncateText(baseTitle, 256);
     } else {
       const comment = item as Comment;
       const linkId =
@@ -1709,6 +1235,7 @@ async function scheduleRelay(
       }
       title = truncateText(`New comment on: ${parentPostTitle}`, 256);
     }
+    // -----------------------------------------------------------------
 
     const footer = {
       text: `r/${subredditName}`,
@@ -1723,7 +1250,8 @@ async function scheduleRelay(
         name: `u/${username}`,
         ...(suppressAuthorEmbed ? {} : { url: authorUrl }),
       },
-      // footer and timestamp will be applied to the LAST embed, not here
+      ...(embedColor ? { color: embedColor } : {}), // flair-based border color for posts
+      // footer + timestamp added to last embed below
     };
 
     // Attach first image (if any) to the main embed for posts
@@ -1741,12 +1269,12 @@ async function scheduleRelay(
     if (itemType === "post" && imageUrls.length > 1) {
       const extraEmbeds = imageUrls.slice(1).map((url) => ({
         image: { url },
+        ...(embedColor ? { color: embedColor } : {}),
       }));
       data.embeds = [...(data.embeds || []), ...extraEmbeds];
     }
 
-    // ✅ Footer + timestamp on the LAST embed only,
-    // so it shows visually after all images.
+    // ✅ Footer + timestamp on the LAST embed only
     if (data.embeds && data.embeds.length > 0) {
       const lastIndex = data.embeds.length - 1;
       data.embeds[lastIndex] = {
@@ -1791,6 +1319,7 @@ async function scheduleRelay(
 
   await redis.hSet(item.id, { scheduled: "true" });
 }
+
 
 async function shouldRelay(
   event: any,
